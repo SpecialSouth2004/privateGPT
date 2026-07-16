@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 from injector import inject, singleton
 
@@ -11,6 +11,7 @@ from private_gpt.components.chat.models.chat_config_models import (
 from private_gpt.components.code_execution.code_execution_component import (
     CodeExecutionComponent,
 )
+from private_gpt.components.tools.remote_execution import build_rebuild_metadata
 from private_gpt.components.tools.tool_names import (
     TEXT_EDITOR_CREATE_TOOL_NAME,
     TEXT_EDITOR_INSERT_TOOL_NAME,
@@ -24,12 +25,15 @@ from private_gpt.components.tools.tool_placeholders import (
     TEXT_EDITOR_VIEW_TOOL_FN,
 )
 from private_gpt.components.tools.utils import truncate_output
+from private_gpt.di import get_global_injector
 from private_gpt.events.models import TextBlock
 from private_gpt.settings.settings import Settings
 
 if TYPE_CHECKING:
-    from private_gpt.components.code_execution.base import CodeExecutionSession
-    from private_gpt.components.sandbox.content_bundle import ContentBundle
+    from private_gpt.components.code_execution.base import (
+        CodeExecutionSession,
+        CodeExecutionSessionConfig,
+    )
     from private_gpt.events.models import ResultContentBlockType
 
 
@@ -49,21 +53,16 @@ class TextEditorToolBuilder:
         self._settings = settings
 
     async def _session(
-        self,
-        session_id: str,
-        bundles: list[ContentBundle] | None = None,
+        self, config: CodeExecutionSessionConfig
     ) -> CodeExecutionSession:
-        session = await self._component.get_or_create_session(
-            session_id, extra_bundles=bundles or None
-        )
+        session = await self._component.get_or_create_session(config)
         if session is None:
             raise ValueError("code_execution provider is not configured.")
         return session
 
     async def build_view_tool(
         self,
-        session_id: str,
-        bundles: list[ContentBundle] | None = None,
+        config: CodeExecutionSessionConfig,
         name: str = TEXT_EDITOR_VIEW_TOOL_NAME,
         type: str = TEXT_EDITOR_VIEW_TOOL_NAME + "_v1",
         description: str = TEXT_EDITOR_VIEW_TOOL_FN.metadata.description,
@@ -81,7 +80,7 @@ class TextEditorToolBuilder:
                     )
                 resolved_view_range = (view_range[0], view_range[1])
 
-            session = await self._session(session_id, bundles)
+            session = await self._session(config)
             result = await session.view(
                 path,
                 view_range=resolved_view_range,
@@ -99,12 +98,20 @@ class TextEditorToolBuilder:
             description=description,
             async_fn=view,
             requirements=[ToolRequirements.SANDBOX],
+            execution_metadata=build_rebuild_metadata(
+                rebuild_text_editor_view_tool,
+                {
+                    "config": config,
+                    "name": name,
+                    "type": type,
+                    "description": description,
+                },
+            ),
         )
 
     async def build_str_replace_tool(
         self,
-        session_id: str,
-        bundles: list[ContentBundle] | None = None,
+        config: CodeExecutionSessionConfig,
         name: str = TEXT_EDITOR_STR_REPLACE_TOOL_NAME,
         type: str = TEXT_EDITOR_STR_REPLACE_TOOL_NAME + "_v1",
         description: str = TEXT_EDITOR_STR_REPLACE_TOOL_FN.metadata.description,
@@ -114,7 +121,7 @@ class TextEditorToolBuilder:
             old_str: str,
             new_str: str,
         ) -> list[ResultContentBlockType]:
-            session = await self._session(session_id, bundles)
+            session = await self._session(config)
             result = await session.str_replace(path, old_str, new_str)
             output = result.output if result.success else f"Error: {result.error}"
             return _format_output(
@@ -129,12 +136,20 @@ class TextEditorToolBuilder:
             description=description,
             async_fn=str_replace,
             requirements=[ToolRequirements.SANDBOX],
+            execution_metadata=build_rebuild_metadata(
+                rebuild_text_editor_str_replace_tool,
+                {
+                    "config": config,
+                    "name": name,
+                    "type": type,
+                    "description": description,
+                },
+            ),
         )
 
     async def build_create_tool(
         self,
-        session_id: str,
-        bundles: list[ContentBundle] | None = None,
+        config: CodeExecutionSessionConfig,
         name: str = TEXT_EDITOR_CREATE_TOOL_NAME,
         type: str = TEXT_EDITOR_CREATE_TOOL_NAME + "_v1",
         description: str = TEXT_EDITOR_CREATE_TOOL_FN.metadata.description,
@@ -143,7 +158,7 @@ class TextEditorToolBuilder:
             path: str,
             file_text: str,
         ) -> list[ResultContentBlockType]:
-            session = await self._session(session_id, bundles)
+            session = await self._session(config)
             result = await session.create(path, file_text)
             output = result.output if result.success else f"Error: {result.error}"
             return _format_output(
@@ -158,12 +173,20 @@ class TextEditorToolBuilder:
             description=description,
             async_fn=create,
             requirements=[ToolRequirements.SANDBOX],
+            execution_metadata=build_rebuild_metadata(
+                rebuild_text_editor_create_tool,
+                {
+                    "config": config,
+                    "name": name,
+                    "type": type,
+                    "description": description,
+                },
+            ),
         )
 
     async def build_insert_tool(
         self,
-        session_id: str,
-        bundles: list[ContentBundle] | None = None,
+        config: CodeExecutionSessionConfig,
         name: str = TEXT_EDITOR_INSERT_TOOL_NAME,
         type: str = TEXT_EDITOR_INSERT_TOOL_NAME + "_v1",
         description: str = TEXT_EDITOR_INSERT_TOOL_FN.metadata.description,
@@ -173,7 +196,7 @@ class TextEditorToolBuilder:
             insert_line: int,
             new_str: str,
         ) -> list[ResultContentBlockType]:
-            session = await self._session(session_id, bundles)
+            session = await self._session(config)
             result = await session.insert(path, insert_line, new_str)
             output = result.output if result.success else f"Error: {result.error}"
             return _format_output(
@@ -188,4 +211,33 @@ class TextEditorToolBuilder:
             description=description,
             async_fn=insert,
             requirements=[ToolRequirements.SANDBOX],
+            execution_metadata=build_rebuild_metadata(
+                rebuild_text_editor_insert_tool,
+                {
+                    "config": config,
+                    "name": name,
+                    "type": type,
+                    "description": description,
+                },
+            ),
         )
+
+
+async def rebuild_text_editor_view_tool(**kwargs: Any) -> ToolSpec:
+    builder = get_global_injector().get(TextEditorToolBuilder)
+    return await builder.build_view_tool(**cast(Any, kwargs))
+
+
+async def rebuild_text_editor_str_replace_tool(**kwargs: Any) -> ToolSpec:
+    builder = get_global_injector().get(TextEditorToolBuilder)
+    return await builder.build_str_replace_tool(**cast(Any, kwargs))
+
+
+async def rebuild_text_editor_create_tool(**kwargs: Any) -> ToolSpec:
+    builder = get_global_injector().get(TextEditorToolBuilder)
+    return await builder.build_create_tool(**cast(Any, kwargs))
+
+
+async def rebuild_text_editor_insert_tool(**kwargs: Any) -> ToolSpec:
+    builder = get_global_injector().get(TextEditorToolBuilder)
+    return await builder.build_insert_tool(**cast(Any, kwargs))

@@ -21,6 +21,7 @@ dependencies = [
     "retry-async>=0.1.4,<0.2",
     "nest-asyncio>=1.6.0",
     "nltk>=3.9.1,<4",
+    "arq>=0.26,<0.27",
 ]
 
 [project.scripts]
@@ -237,7 +238,7 @@ tool-database = [
     "private-gpt[database]",
 ]
 tool-web-scraping = [
-    "playwright>=1.59.0",
+    "playwright==1.60.0",
 ]
 tools = [
     "private-gpt[tool-mcp,tool-tabular,tool-database,tool-web-scraping]",

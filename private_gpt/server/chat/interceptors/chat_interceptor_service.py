@@ -1,9 +1,9 @@
 from injector import inject, singleton
 
-from private_gpt.components.engines.chat_loop.interceptors.chat_loop_interceptor_chain import (
+from private_gpt.components.engines.chat.interceptors.chat_interceptor_chain import (
     ChatLoopInterceptorChain,
 )
-from private_gpt.components.engines.chat_loop.interceptors.restore_stateless_input_interceptor import (
+from private_gpt.components.engines.chat.interceptors.restore_stateless_input_interceptor import (
     RestoreStatelessInputInterceptorRequest,
 )
 from private_gpt.components.prompts.prompt_builder import PromptBuilderService
@@ -12,6 +12,9 @@ from private_gpt.server.chat.interceptors.citation_interceptor import (
 )
 from private_gpt.server.chat.interceptors.condensation_interceptor import (
     CondensationRequestInterceptor,
+)
+from private_gpt.server.chat.interceptors.configure_tool_execution_interceptor import (
+    ConfigureToolExecutionInterceptor,
 )
 from private_gpt.server.chat.interceptors.configure_tool_interceptor import (
     ConfigureToolRequestInterceptor,
@@ -38,7 +41,6 @@ from private_gpt.server.chat.interceptors.mcp_interceptor import McpRequestInter
 from private_gpt.server.chat.interceptors.multimodal_interceptor import (
     MultimodalRequestInterceptor,
 )
-from private_gpt.server.chat.interceptors.ping_loop_interceptor import PingInterceptor
 from private_gpt.server.chat.interceptors.platform_guidelines_interceptor import (
     PlatformGuidelinesInterceptor,
 )
@@ -88,6 +90,8 @@ class ChatInterceptorService:
         skill_tool_visibility_interceptor: SkillToolVisibilityInterceptor,
         tool_choice_interceptor: ToolChoiceRequestInterceptor,
         configure_tool_interceptor: ConfigureToolRequestInterceptor,
+        # --- tool execution interceptors ---
+        configure_tool_execution_interceptor: ConfigureToolExecutionInterceptor,
         # --- loop interceptors (run each iteration, order matters) ---
         document_file_interceptor: DocumentFilePreprocessingInterceptor,
         multimodal_interceptor: MultimodalRequestInterceptor,
@@ -97,7 +101,6 @@ class ChatInterceptorService:
         # --- response interceptors (run each iteration, order matters) ---
         extract_citation_response_interceptor: ExtractCitationInterceptor,
         filter_event_by_type_interceptor: FilterZylonInterceptor,
-        ping_interceptor: PingInterceptor,
     ) -> None:
         self._prompt_builder_service = prompt_builder_service
 
@@ -122,6 +125,7 @@ class ChatInterceptorService:
                     configure_tool_interceptor,
                     platform_guidelines_interceptor,
                 ],
+                tools=[configure_tool_execution_interceptor],
             )
             # Preprocess the chat history
             .add_range(
@@ -186,7 +190,6 @@ class ChatInterceptorService:
                 "sanity",
                 responses=[
                     filter_event_by_type_interceptor,
-                    ping_interceptor,
                 ],
             )
         )
