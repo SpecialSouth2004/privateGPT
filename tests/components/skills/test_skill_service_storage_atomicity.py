@@ -1,5 +1,5 @@
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -10,12 +10,7 @@ from private_gpt.settings.settings import unsafe_typed_settings
 
 def _skill_md_bytes() -> bytes:
     return (
-        b"---\n"
-        b"name: test-skill\n"
-        b"description: test description\n"
-        b"---\n"
-        b"\n"
-        b"Use this skill\n"
+        b"---\nname: test-skill\ndescription: test description\n---\n\nUse this skill\n"
     )
 
 
@@ -31,6 +26,7 @@ def _service(*, repo: object, storage: object) -> SkillService:
         settings=_settings(),
         storage_component=SimpleNamespace(get_object_storage=lambda **_: storage),
         skill_repository=repo,
+        cache=MagicMock(),
     )
 
 

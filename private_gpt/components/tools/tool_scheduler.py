@@ -11,6 +11,7 @@ from private_gpt.celery.dispatch import dispatch_task
 from private_gpt.components.tools.remote_execution import (
     execute_tool_request,
     invoke_execution_hook,
+    tool_execution_interceptor_paths,
 )
 from private_gpt.settings.settings import Settings
 
@@ -47,8 +48,7 @@ class BaseToolScheduler(ABC):
         request: ToolExecutionRequest,
         state_ctx: ChatState | None = None,
         interceptors: list[ToolExecutionInterceptor] | None = None,
-    ) -> ToolExecutionResponse:
-        ...
+    ) -> ToolExecutionResponse: ...
 
     async def async_execute(
         self,
@@ -64,8 +64,7 @@ class BaseToolScheduler(ABC):
         self,
         request: ToolExecutionRequest,
         task_id: str | None = None,
-    ) -> bool:
-        ...
+    ) -> bool: ...
 
     async def cancel_task(self, task_id: str) -> bool:
         del task_id
@@ -153,7 +152,11 @@ class CeleryToolScheduler(BaseToolScheduler):
         state_ctx: ChatState | None = None,
         interceptors: list[ToolExecutionInterceptor] | None = None,
     ) -> str:
-        del state_ctx, interceptors
+        del state_ctx
+
+        request = request.model_copy(
+            update={"interceptor_paths": tool_execution_interceptor_paths(interceptors)}
+        )
 
         correlation_id = request.context.get("correlation_id")
         task_id = f"{correlation_id}:{request.tool_id}" if correlation_id else None

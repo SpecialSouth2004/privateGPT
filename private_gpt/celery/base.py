@@ -7,15 +7,20 @@ import threading
 from collections.abc import Callable
 from typing import Any
 
-import nest_asyncio  # type: ignore
+import nest_asyncio
 from celery.app.task import Task
-from celery.backends.redis import RedisBackend  # type: ignore
+from celery.backends.redis import RedisBackend  # ty:ignore[unresolved-import]
 from celery.exceptions import Retry, SoftTimeLimitExceeded
 from celery.utils.log import get_task_logger
 
 from private_gpt.celery.callback import task_after_return
 from private_gpt.celery.config import celery_settings
-from private_gpt.di import clean_global_injector, get_global_injector
+from private_gpt.di import (
+    clean_global_injector,
+    create_application_injector,
+    get_global_injector,
+    set_global_injector,
+)
 
 logger = get_task_logger(__name__)
 logger.setLevel("DEBUG")
@@ -55,7 +60,7 @@ class RedisFailureRetryTracker:
         self._expiry = expiry
 
     def get(self, task_id: str) -> int:
-        from celery import current_app  # type: ignore
+        from celery import current_app
 
         key = self._get_key(task_id)
         backend = current_app.backend
@@ -63,7 +68,7 @@ class RedisFailureRetryTracker:
         return int(backend.client.get(key) or 0)
 
     def increment(self, task_id: str) -> int:
-        from celery import current_app  # type: ignore
+        from celery import current_app
 
         key = self._get_key(task_id)
         backend = current_app.backend
@@ -75,7 +80,7 @@ class RedisFailureRetryTracker:
         return int(result[0])
 
     def decrement(self, task_id: str) -> int:
-        from celery import current_app  # type: ignore
+        from celery import current_app
 
         key = self._get_key(task_id)
         backend = current_app.backend
@@ -87,7 +92,7 @@ class RedisFailureRetryTracker:
         return int(result[0])
 
     def cleanup(self, task_id: str) -> None:
-        from celery import current_app  # type: ignore
+        from celery import current_app
 
         key = self._get_key(task_id)
         backend = current_app.backend
@@ -117,7 +122,7 @@ class MaxFailureRetriesExceeded(Exception):
     pass
 
 
-class _BackgroundTask(Task):  # type: ignore
+class _BackgroundTask(Task):
     """Task with controlled and failure retry capabilities."""
 
     abstract = True
@@ -257,8 +262,7 @@ class StatelessBackgroundTask(_BackgroundTask):
         if run_method is None:
             raise NotImplementedError("Subclass must implement 'run' method")
 
-        # Inject injector
-        get_global_injector(allow_to_generate_new_injectors=True)
+        set_global_injector(create_application_injector())
 
         if asyncio.iscoroutinefunction(run_method):
             result = await run_method(*args, **kwargs)

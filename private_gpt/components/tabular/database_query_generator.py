@@ -7,18 +7,17 @@ import pickle
 import re
 import time
 from collections.abc import Generator, Sequence
-from typing import TYPE_CHECKING, Any, ClassVar, cast
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
-from cachetools import TTLCache, cachedmethod
-from cachetools.keys import hashkey
-from Levenshtein import distance
+from Levenshtein import distance  # ty:ignore[unresolved-import]
 from llama_index.core.base.llms.types import ChatMessage, MessageRole
 from pandas import DataFrame
 from pydantic import BaseModel, Field
 from sqlalchemy import Connection, Engine, create_engine, inspect, text
 from sqlalchemy.exc import ProgrammingError, SQLAlchemyError
 
+from private_gpt.components.cache import Cache, MemoryCache
 from private_gpt.components.chat.models.chat_config_models import (
     CondensationConfig,
     ResolvedChatRequest,
@@ -51,9 +50,13 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 try:
-    import sqlglot  # type: ignore[import-not-found]
-    from sqlglot import Dialects  # type: ignore[import-not-found]
-    from sqlglot.errors import ParseError  # type: ignore[import-not-found]
+    import sqlglot  # type: ignore[import-not-found]  # ty:ignore[unresolved-import]
+    from sqlglot import (  # ty:ignore[unresolved-import]
+        Dialects,  # type: ignore[import-not-found]
+    )
+    from sqlglot.errors import (  # ty:ignore[unresolved-import]
+        ParseError,  # type: ignore[import-not-found]
+    )
 except (ImportError, ModuleNotFoundError) as e:
     raise ImportError(
         format_missing_dependency_message(
@@ -72,7 +75,7 @@ except (ImportError, ModuleNotFoundError) as e:
 @functools.cache
 def _load_ibm_db() -> Any:
     try:
-        import ibm_db  # type: ignore[import-not-found]
+        import ibm_db  # type: ignore[import-not-found]  # ty:ignore[unresolved-import]
     except ImportError as e:
         raise ImportError(
             format_missing_dependency_message(
@@ -225,7 +228,6 @@ class DatabaseQueryGenerator:
     _engine: Engine | None
     _connection: Connection | None
     _dialect: str | None
-    _schema_cache: ClassVar[TTLCache] = TTLCache(maxsize=1000, ttl=86400)  # type: ignore
     inspector_config: InspectorConfig
     batch_size: int
     timeout_seconds: int | None
@@ -246,6 +248,7 @@ class DatabaseQueryGenerator:
         batch_size: int = 1000,
         timeout_seconds: int | None = None,
         max_mb_result: int | None = None,
+        cache: Cache | None = None,
     ):
         # Need to do it lazily to avoid circular dependency
         self.connection_string = connection_string
@@ -266,6 +269,7 @@ class DatabaseQueryGenerator:
         self.batch_size = batch_size
         self.timeout_seconds = timeout_seconds
         self.max_mb_result = max_mb_result
+        self.cache = cache or MemoryCache(max_entries=1000)
 
     def _extract_database_name(self) -> str:
         # crude way to extract the database name from the connection string
@@ -968,17 +972,19 @@ class DatabaseQueryGenerator:
                 self.is_readonly,
             )
 
-    @cachedmethod(
-        cache=lambda self: self._schema_cache,
-        key=lambda self, cache_key, schema, inspector: hashkey(cache_key, schema),
-    )
     def _get_cached_objects_by_type(
         self,
         cache_key: str,
         schema: str,
         inspector: DatabaseObjectInspector,
     ) -> list[InspectedDatabaseObject]:
-        return list(inspector.get_objects(schema))
+        cached_objects = self.cache.get("database-schema", cache_key)
+        if cached_objects is not None:
+            return cast(list[InspectedDatabaseObject], cached_objects)
+
+        objects = list(inspector.get_objects(schema))
+        self.cache.set("database-schema", cache_key, objects)
+        return objects
 
     def _extract_database_schema(
         self,
@@ -1009,19 +1015,19 @@ class DatabaseQueryGenerator:
 
     def _try_to_fix_unsupported_type_error(self, original_sql: str) -> str | None:
         try:
-            from sqlgpt_parser.format.formatter import (  # type: ignore[import-not-found,import-untyped]
+            from sqlgpt_parser.format.formatter import (  # type: ignore[import-not-found,import-untyped]  # ty:ignore[unresolved-import]
                 format_sql,
             )
-            from sqlgpt_parser.parser.mysql_parser import (  # type: ignore[import-not-found,import-untyped]
+            from sqlgpt_parser.parser.mysql_parser import (  # type: ignore[import-not-found,import-untyped]  # ty:ignore[unresolved-import]
                 parser as mysql_parser,
             )
-            from sqlgpt_parser.parser.tree.expression import (  # type: ignore[import-not-found,import-untyped]
+            from sqlgpt_parser.parser.tree.expression import (  # type: ignore[import-not-found,import-untyped]  # ty:ignore[unresolved-import]
                 QualifiedNameReference,
             )
-            from sqlgpt_parser.parser.tree.qualified_name import (  # type: ignore[import-not-found,import-untyped]
+            from sqlgpt_parser.parser.tree.qualified_name import (  # type: ignore[import-not-found,import-untyped]  # ty:ignore[unresolved-import]
                 QualifiedName,
             )
-            from sqlgpt_parser.parser.tree.select_item import (  # type: ignore[import-not-found,import-untyped]
+            from sqlgpt_parser.parser.tree.select_item import (  # type: ignore[import-not-found,import-untyped]  # ty:ignore[unresolved-import]
                 SingleColumn,
             )
         except ImportError:

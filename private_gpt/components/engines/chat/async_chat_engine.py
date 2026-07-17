@@ -163,10 +163,21 @@ class IterationCheckpointPayload(BaseModel):
     has_output_usage: bool = False
 
 
+class AsyncChatCheckpoint(BaseModel):
+    checkpoint: str
+    input: ChatInputState
+    iteration: int = 0
+    next_block_count: int = 0
+    payload: IterationCheckpointPayload = Field(
+        default_factory=IterationCheckpointPayload
+    )
+
+
 @dataclass
 class _CheckpointContext:
     checkpoint: str
     stop_reason: str | None = None
+    context_stack: ContextStack | None = None
     payload: IterationCheckpointPayload = field(
         default_factory=IterationCheckpointPayload
     )
@@ -221,12 +232,10 @@ class EventChannel(ABC):
     """Sink for events produced by the engine."""
 
     @abstractmethod
-    def emit(self, event: Event) -> None:
-        ...
+    def emit(self, event: Event) -> None: ...
 
     @abstractmethod
-    async def close(self) -> None:
-        ...
+    async def close(self) -> None: ...
 
 
 class LocalEventChannel(EventChannel):
@@ -361,23 +370,25 @@ class AsyncChatEngine:
 
     async def resume(
         self,
-        resume_type: str,
-        request: ChatRequest,
-        iteration: int = 0,
-        next_block_count: int = 0,
+        checkpoint: AsyncChatCheckpoint,
         hooks: ExecutionHooks | None = None,
-        checkpoint_payload: IterationCheckpointPayload | None = None,
         *,
         channel: EventChannel,
     ) -> ChatState:
         """Route to the saved checkpoint, then continue the loop."""
-        payload = checkpoint_payload or IterationCheckpointPayload()
         context = self._build_checkpoint_context(
-            checkpoint=resume_type, payload=payload
+            checkpoint=checkpoint.checkpoint,
+            payload=checkpoint.payload,
+            context_stack=checkpoint.input.context_stack,
         )
-        handler = self._resolve_checkpoint_handler(resume_type)
+        handler = self._resolve_checkpoint_handler(checkpoint.checkpoint)
         state = await handler(
-            request, iteration, next_block_count, channel, hooks, context
+            checkpoint.input.request,
+            checkpoint.iteration,
+            checkpoint.next_block_count,
+            channel,
+            hooks,
+            context,
         )
         new_payload = IterationCheckpointPayload(
             total_input_tokens=state.runtime.total_input_tokens,
@@ -603,10 +614,12 @@ class AsyncChatEngine:
         checkpoint: str,
         stop_reason: str | None = None,
         payload: IterationCheckpointPayload | None = None,
+        context_stack: ContextStack | None = None,
     ) -> _CheckpointContext:
         return _CheckpointContext(
             checkpoint=checkpoint,
             stop_reason=stop_reason,
+            context_stack=context_stack,
             payload=payload or IterationCheckpointPayload(),
         )
 
@@ -649,7 +662,9 @@ class AsyncChatEngine:
         hooks: ExecutionHooks | None,
         checkpoint_context: _CheckpointContext,
     ) -> ChatState:
-        run = self._initialize_run(request, hooks=hooks)
+        run = self._initialize_run(
+            request, context_stack=checkpoint_context.context_stack, hooks=hooks
+        )
         run.state.runtime.iteration = iteration
         run.state.runtime.next_block_count = next_block_count
         run.block_count = next_block_count
@@ -669,8 +684,10 @@ class AsyncChatEngine:
         hooks: ExecutionHooks | None,
         checkpoint_context: _CheckpointContext,
     ) -> ChatState:
-        del iteration, next_block_count, checkpoint_context
-        run = self._initialize_run(request, hooks=hooks)
+        del iteration, next_block_count
+        run = self._initialize_run(
+            request, context_stack=checkpoint_context.context_stack, hooks=hooks
+        )
         channel.emit(RawMessageStartEvent.from_defaults())
         run.state = self._snapshot(run.state, TimelinePhase.START)
         run.state = run.state.model_copy(deep=True)
@@ -698,6 +715,7 @@ class AsyncChatEngine:
             iteration,
             next_block_count,
             channel,
+            context_stack=checkpoint_context.context_stack,
             hooks=hooks,
             checkpoint_payload=checkpoint_context.payload,
         )
@@ -708,12 +726,15 @@ class AsyncChatEngine:
         iteration: int,
         next_block_count: int,
         channel: EventChannel,
+        context_stack: ContextStack | None = None,
         hooks: ExecutionHooks | None = None,
         checkpoint_payload: IterationCheckpointPayload | None = None,
     ) -> ChatState:
         """Continue from the tools checkpoint without re-running the LLM call."""
         try:
-            run = self._initialize_run(request, hooks=hooks)
+            run = self._initialize_run(
+                request, context_stack=context_stack, hooks=hooks
+            )
             run.state.runtime.iteration = iteration
             run.state.runtime.next_block_count = next_block_count
             run.block_count = next_block_count
@@ -793,7 +814,9 @@ class AsyncChatEngine:
         checkpoint_context: _CheckpointContext,
     ) -> ChatState:
         del iteration, next_block_count
-        run = self._initialize_run(request, hooks=hooks)
+        run = self._initialize_run(
+            request, context_stack=checkpoint_context.context_stack, hooks=hooks
+        )
         self._apply_payload_usage(run, checkpoint_context.payload)
         stop_reason = checkpoint_context.stop_reason
         run.state = run.state.model_copy(deep=True)
@@ -1228,7 +1251,9 @@ class AsyncChatEngine:
         final_json = tool_state.last_serialized.get(prev_raw_id, "")
         final_obj: Any = json.loads(final_json) if final_json else {}
 
-        tool_name = tool_state.active_tool_block.content_block.name  # type: ignore[union-attr]
+        tool_name = getattr(tool_state.active_tool_block.content_block, "name", None)
+        if not isinstance(tool_name, str):
+            raise TypeError("Active tool block must define a name")
         tool_schema = schema_by_name.get(tool_name, {})
         if tool_schema:
             final_obj = _coerce_kwargs(final_obj, tool_schema)

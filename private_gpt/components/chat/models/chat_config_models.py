@@ -2,7 +2,7 @@ import builtins
 import enum
 import inspect
 import re
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from typing import Any, ClassVar, Literal
 
 from llama_index.core.base.llms.types import ChatMessage, MessageRole, TextBlock
@@ -130,17 +130,21 @@ class ToolExecutionMetadata(BaseModel):
 
     @field_serializer("rebuild_kwargs", when_used="json")
     def _serialize_kwargs(self, kwargs: dict[str, Any]) -> dict[str, Any]:
-        """Tag BaseModel values so they survive the JSON roundtrip."""
-        result: dict[str, Any] = {}
-        for key, value in kwargs.items():
-            if isinstance(value, BaseModel):
-                result[key] = {
-                    self.MODEL_TAG_KEY: f"{type(value).__module__}:{type(value).__qualname__}",
-                    "data": value.model_dump(mode="json"),
-                }
-            else:
-                result[key] = value
-        return result
+        """Tag nested BaseModel values so they survive the JSON roundtrip."""
+        return {key: self._serialize_value(value) for key, value in kwargs.items()}
+
+    @classmethod
+    def _serialize_value(cls, value: Any) -> Any:
+        if isinstance(value, BaseModel):
+            return {
+                cls.MODEL_TAG_KEY: f"{type(value).__module__}:{type(value).__qualname__}",
+                "data": value.model_dump(mode="json"),
+            }
+        if isinstance(value, dict):
+            return {key: cls._serialize_value(item) for key, item in value.items()}
+        if isinstance(value, list | tuple):
+            return [cls._serialize_value(item) for item in value]
+        return value
 
     @field_validator("rebuild_kwargs", mode="before")
     @classmethod
@@ -150,18 +154,22 @@ class ToolExecutionMetadata(BaseModel):
             return kwargs
         import importlib
 
-        result: dict[str, Any] = {}
-        for key, value in kwargs.items():
-            if isinstance(value, dict) and cls.MODEL_TAG_KEY in value:
-                module_path, qualname = value[cls.MODEL_TAG_KEY].rsplit(":", 1)
-                module = importlib.import_module(module_path)
-                model_cls: Any = module
-                for attribute in qualname.split("."):
-                    model_cls = getattr(model_cls, attribute)
-                result[key] = model_cls.model_validate(value["data"])
-            else:
-                result[key] = value
-        return result
+        def deserialize_value(value: Any) -> Any:
+            if isinstance(value, list):
+                return [deserialize_value(item) for item in value]
+            if not isinstance(value, dict):
+                return value
+            if cls.MODEL_TAG_KEY not in value:
+                return {key: deserialize_value(item) for key, item in value.items()}
+
+            module_path, qualname = value[cls.MODEL_TAG_KEY].rsplit(":", 1)
+            module = importlib.import_module(module_path)
+            model_cls: Any = module
+            for attribute in qualname.split("."):
+                model_cls = getattr(model_cls, attribute)
+            return model_cls.model_validate(value["data"])
+
+        return {key: deserialize_value(value) for key, value in kwargs.items()}
 
 
 class ToolSpec(BaseModel):
@@ -296,6 +304,10 @@ class ToolSpec(BaseModel):
         if not isinstance(tool, BaseTool):
             raise ValueError("Unsupported tool type. Expected a FunctionTool.")
 
+        partial_params = getattr(tool, "partial_params", None)
+        if not isinstance(partial_params, Mapping):
+            partial_params = None
+
         schema: dict[str, Any] = {}
         if tool.metadata.fn_schema:
             schema = tool.metadata.fn_schema.model_json_schema()
@@ -314,9 +326,7 @@ class ToolSpec(BaseModel):
             async_callback=tool._async_callback
             if hasattr(tool, "_async_callback")
             else None,
-            partial_params=tool.partial_params
-            if hasattr(tool, "partial_params")
-            else None,
+            partial_params=partial_params,
             execution_metadata=None,
         )
 
@@ -364,8 +374,9 @@ class ToolSpec(BaseModel):
 
         ignore_fields.extend(partial_params.keys())
 
+        function_name = getattr(fn, "__name__", fn.__class__.__name__)
         fn_schema = create_schema_from_function(
-            fn.__name__,
+            function_name,
             fn,
             additional_fields=None,
             ignore_fields=ignore_fields,
@@ -460,7 +471,6 @@ class CondensationConfig(BaseModel):
 
 
 class ThinkingConfig(BaseModel):
-
     enabled: bool = Field(
         default=False,
         description="Whether to enable reasoning in the chat.",
